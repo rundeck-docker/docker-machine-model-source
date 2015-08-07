@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+
+# To implement this command, edit the "Command implementation" section below. 
+
+# Usage
+# -----
+
+# Comments prefixed with `#/` are managed by stubbs.
+# The `command` and `usage` comments describe the command
+# and show its options.
+# 
+#/ command: docker-machine-model-source:get-json: "get the docker-machine nodes as yaml"
+#/ usage: rerun docker-machine-model-source:get-json  --docker-host <${DOCKER_HOST:-}>  --docker-tls-verify <${DOCKER_TLS_VERIFY:-}>  --docker-cert-path <${DOCKER_CERT_PATH:-}>  --model-dir <> 
+
+# Load common functions
+# ---------------------
+
+# Load the function library for this module.
+# This loads rerun functions, too.
+. $RERUN_MODULE_DIR/lib/functions.sh get-json || { 
+  echo >&2 "Failed loading function library." ; exit 1 ; 
+}
+
+# Error handling
+# ---------------
+
+# This script is designed to _fail-fast_.
+
+# Trap errors and exit. The call to `rerun_die` will print the
+# the error message and exit with the error command exit status. 
+
+trap 'rerun_die $? "*** command failed: docker-machine-model-source:get-json. ***"' ERR
+
+# Run [set] `nounset` to treat unset variables as errors. Set [pipefail]
+# so a pipeline return status is the value of the last 
+# (rightmost) command to exit with non-zero status.
+#
+# [set]: http://ss64.com/bash/set.html
+# [pipefail]: http://www.gnu.org/software/bash/manual/html_node/Pipelines.html
+
+set -o nounset -o pipefail
+
+# Command variables
+# -----------------
+
+# This command script can access the following variables
+# declared by `rerun` or by the option parser function.
+
+#/ rerun-variables: RERUN, RERUN_VERSION, RERUN_MODULES, RERUN_MODULE_DIR
+#/ option-variables: DOCKER_HOST DOCKER_TLS_VERIFY DOCKER_CERT_PATH MODEL_DIR
+
+# The `rerun_options_parse` function processes the command line
+# arguments. Each accepted command line flag results in setting 
+# one the corresponding option variables.
+
+rerun_options_parse "$@"
+
+
+# Command implementation
+# ----------------------
+
+[[ ! -d "$MODEL_DIR" ]] && mkdir -p "$MODEL_DIR"
+
+TMP_DIR=$(mktemp -d "/tmp/docker-machine-model-source:get-json.XXXX")
+
+docker-machine ls  |
+sed -n '1!p' > $TMP_DIR/docker.ps.out
+
+IFS=$'\r\n'
+MACHINES=( $(< $TMP_DIR/docker.ps.out) )
+
+
+echo '{"nodes": {'
+i=0
+for line in ${MACHINES[@]}
+do
+    (( i++ ))
+
+    eval machine_info=( $line )
+    machine=${machine_info[0]}
+    driver=${machine_info[1]}
+    status=$(echo ${machine_info[2]} | tr '[:upper:]' '[:lower:]')
+
+    docker-machine inspect $machine > $TMP_DIR/$machine.json
+
+    echo "\"$machine\": {"
+    echo "\"tags\": [machine,$status]", 
+    echo " \"attributes\":"
+
+    cat $TMP_DIR/$machine.json |
+    jq ". | 
+{       nodename: .Driver.MachineName,
+        username: .Driver.SSHUser,
+        hostname: .Driver.IPAddress,
+        URL: @uri \"tcp://\(.Driver.IPAddress):2376\",
+        Name: .Driver.MachineName,
+        DriverName: .DriverName,
+        IPAddress: .Driver.IPAddress,
+        CPU: .Driver.CPU,
+        SSHUser: .Driver.SSHUser,
+        SSHPort: .Driver.SSHPort,
+        Memory: .Driver.Memory,
+        DiskSize: .Driver.DiskSize,
+        CaCertPath: .Driver.CaCertPath,
+        PrivateKeyPath: .Driver.PrivateKeyPath,
+        HostOnlyCIDR: .Driver.HostOnlyCIDR,
+        \"node-executor\": @text \"docker-machine-node-executor\",        
+        \"status\": @text \"$status\",
+        \"docker-host\": @uri \"tcp://\(.Driver.IPAddress):2376\",
+        \"docker-cert-path\": .StorePath,
+        StorePath: .StorePath}"
+
+    (( $i < ${#MACHINES[*]} )) && echo "}," || echo "}"
+
+    if [[ ${status} == running ]]
+    then
+        (
+        # export the DOCKER_* environment variables for defaulting the -docker-* options.
+        eval $(docker-machine env $machine)
+        rerun docker-container-model-source:get-json \
+            --docker-machine-name $DOCKER_MACHINE_NAME > $MODEL_DIR/$machine.json
+        ) &
+    fi
+
+done
+
+wait
+echo '}
+}'
+
+
+# Done. Exit with last command exit status.
+exit $?
+
