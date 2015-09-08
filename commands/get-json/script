@@ -69,8 +69,18 @@ sed -n '1!p' > $TMP_DIR/docker.ps.out
 IFS=$'\r\n'
 MACHINES=( $(< $TMP_DIR/docker.ps.out) )
 
+# ui:color=color, ui:bgcolor=color, ui:icon:name=glyphicon-whatever, ui:icon:color/bgcolor
+# also ui:badges=glyphicon-a,glyphicon-b to add badges to the node
+UI_COLOR=
+UI_ICON=glyphicon-tower
 
-echo '{"nodes": {'
+jsq() {
+    local container=$1
+    local key=$2
+    cat $TMP_DIR/$container.json | jq --raw-output ". | $key"
+}
+
+echo '{'
 i=0
 for line in ${MACHINES[@]}
 do
@@ -80,35 +90,43 @@ do
     machine=${machine_info[0]}
     driver=${machine_info[1]}
     status=$(echo ${machine_info[2]} | tr '[:upper:]' '[:lower:]')
-
+    UI_ICON_COLOR=
+    [[ "${status}" == "running" ]] && {
+        UI_BADGES=(glyphicon-thumbs-up)
+        UI_ICON_COLOR=green
+    } || {
+        UI_BADGES=(glyphicon-thumbs-down)
+    }
     docker-machine inspect $machine > $TMP_DIR/$machine.json
 
     echo "\"$machine\": {"
-    echo "\"tags\": [machine,$status]", 
-    echo " \"attributes\":"
+    echo "\"tags\": \"machine,$status\"", 
 
-    cat $TMP_DIR/$machine.json |
-    jq ". | 
-{       nodename: .Driver.MachineName,
-        username: .Driver.SSHUser,
-        hostname: .Driver.IPAddress,
-        URL: @uri \"tcp://\(.Driver.IPAddress):2376\",
-        Name: .Driver.MachineName,
-        DriverName: .DriverName,
-        IPAddress: .Driver.IPAddress,
-        CPU: .Driver.CPU,
-        SSHUser: .Driver.SSHUser,
-        SSHPort: .Driver.SSHPort,
-        Memory: .Driver.Memory,
-        DiskSize: .Driver.DiskSize,
-        CaCertPath: .Driver.CaCertPath,
-        PrivateKeyPath: .Driver.PrivateKeyPath,
-        HostOnlyCIDR: .Driver.HostOnlyCIDR,
-        \"node-executor\": @text \"docker-machine-node-executor\",        
-        \"status\": @text \"$status\",
-        \"docker-host\": @uri \"tcp://\(.Driver.IPAddress):2376\",
-        \"docker-cert-path\": .StorePath,
-        StorePath: .StorePath}"
+    cat <<EOF
+        "nodename": "$(jsq $machine .Driver.MachineName)",
+        "username": "$(jsq $machine .Driver.SSHUser)",
+        "hostname": "$(jsq $machine .Driver.IPAddress)",
+        "URL": "tcp://$(jsq $machine .Driver.IPAddress):2376",
+        "Name": "$(jsq $machine .Driver.MachineName)",
+        "DriverName": "$(jsq $machine .DriverName)",
+        "IPAddress": "$(jsq $machine .Driver.IPAddress)",
+        "CPU": "$(jsq $machine .Driver.CPU)",
+        "SSHUser": "$(jsq $machine .Driver.SSHUser)",
+        "SSHPort": "$(jsq $machine .Driver.SSHPort)",
+        "Memory": "$(jsq $machine .Driver.Memory)",
+        "DiskSize": "$(jsq $machine .Driver.DiskSize)",
+        "CaCertPath": "$(jsq $machine .Driver.CaCertPath)",
+        "PrivateKeyPath": "$(jsq $machine .Driver.PrivateKeyPath)",
+        "HostOnlyCIDR": "$(jsq $machine .Driver.HostOnlyCIDR)",
+        "StorePath": "$(jsq $machine .StorePath)",        
+        "node-executor": "docker-machine-node-executor",
+        "status": "$status",
+        "docker-host": "tcp://$(jsq $machine .Driver.IPAddress):2376",
+        "docker-cert-path": "$(jsq $machine .StorePath)",
+        "ui:icon:name": "$UI_ICON",
+        "ui:icon:color": "${UI_ICON_COLOR:-}",
+        "ui:badges": "${UI_BADGES[*]}"
+EOF
 
     (( $i < ${#MACHINES[*]} )) && echo "}," || echo "}"
 
@@ -125,8 +143,7 @@ do
 done
 
 wait
-echo '}
-}'
+echo '}'
 
 
 # Done. Exit with last command exit status.
